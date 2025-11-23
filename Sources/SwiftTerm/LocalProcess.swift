@@ -79,6 +79,8 @@ public class LocalProcess {
     var readQueue: DispatchQueue
     
     var io: DispatchIO?
+    // Ensure we only ever dispatch a single termination event even if multiple sources fire (EOF + process exit monitor)
+    private var terminationDispatched = false
     
     /**
      * Initializes the LocalProcess runner and communication with the host happens via the provided
@@ -143,8 +145,7 @@ public class LocalProcess {
         if data.count == 0 {
             childfd = -1
             if running {
-                running = false
-                // delegate.processTerminated (self, exitCode: nil)
+                dispatchTermination(exitCode: nil)
             }
             return
         }
@@ -173,11 +174,18 @@ public class LocalProcess {
     var childMonitor: DispatchSourceProcess?
 #endif
 
-    func processTerminated ()
-    {
+    func processTerminated() {
         var n: Int32 = 0
-        waitpid (shellPid, &n, WNOHANG)
-        delegate?.processTerminated(self, exitCode: n)
+        waitpid(shellPid, &n, WNOHANG)
+        dispatchTermination(exitCode: n)
+    }
+
+    // Dispatch termination exactly once regardless of origin
+    private func dispatchTermination(exitCode: Int32?) {
+        guard !terminationDispatched else { return }
+        terminationDispatched = true
+        NSLog("🛑 LocalProcess.dispatchTermination pid=\(shellPid) code=\(exitCode?.description ?? "nil")")
+        delegate?.processTerminated(self, exitCode: exitCode)
         running = false
     }
     

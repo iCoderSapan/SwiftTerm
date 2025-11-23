@@ -67,6 +67,15 @@ public protocol LocalProcessTerminalViewDelegate: AnyObject {
 open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalProcessDelegate {
     
     var process: LocalProcess!
+    // Subscriber-style termination handlers (closure-based) for robust replay even if delegate was not set at exit time.
+    public typealias TerminationHandler = (Int32?) -> Void
+    private var terminationHandlers: [UUID: TerminationHandler] = [:]
+    private var hasTerminated: Bool = false
+    private var storedExitCode: Int32? = nil
+    // Expose running state for polling fallbacks
+    public var isProcessRunning: Bool { process?.running ?? false }
+    // External hook set by host app (wrapper) to ensure termination handling even if delegate not wired in time
+    public var externalTerminationHook: ((Int32?) -> Void)? = nil
     
     public override init (frame: CGRect)
     {
@@ -166,7 +175,41 @@ open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalPr
      * Implements the LocalProcessDelegate method.
      */
     open func processTerminated(_ source: LocalProcess, exitCode: Int32?) {
+        let codeDesc = exitCode.map { String($0) } ?? "nil"
+        NSLog("MacLocalTerminalView.processTerminated exitCode=\(codeDesc) previousHasTerminated=\(hasTerminated) handlerCount=\(terminationHandlers.count)")
+        if let hook = externalTerminationHook {
+            hook(exitCode)
+            NSLog("MacLocalTerminalView invoked externalTerminationHook exitCode=\(codeDesc)")
+        } else {
+            NSLog("MacLocalTerminalView externalTerminationHook not set; no direct coordinator path")
+        }
+        hasTerminated = true
+        storedExitCode = exitCode
         processDelegate?.processTerminated(source: self, exitCode: exitCode)
+        // Fire all handlers exactly once
+        for (_, handler) in terminationHandlers {
+            handler(exitCode)
+        }
+        // Handlers remain so late registrants can replay; we keep flags and replay on registration.
+    }
+
+    // Register a termination handler; invoked immediately if already terminated.
+    @discardableResult
+    public func addTerminationHandler(_ handler: @escaping TerminationHandler) -> UUID {
+        let id = UUID()
+        terminationHandlers[id] = handler
+        if hasTerminated {
+            NSLog("🛑 Replay termination to late handler id=\(id.uuidString.prefix(8)) code=\(storedExitCode?.description ?? "nil")")
+            handler(storedExitCode)
+        } else {
+            NSLog("🟡 Registered termination handler id=\(id.uuidString.prefix(8)) (not terminated yet)")
+        }
+        return id
+    }
+
+    // Remove a previously registered termination handler.
+    public func removeTerminationHandler(_ id: UUID) {
+        terminationHandlers.removeValue(forKey: id)
     }
     
     /**

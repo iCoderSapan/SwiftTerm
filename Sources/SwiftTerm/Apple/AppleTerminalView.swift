@@ -470,7 +470,7 @@ extension TerminalView {
             
             // last row
             if startRow < row && endRow == row {
-                var extra = endCol == terminal.cols-1 ? 1 : 0
+                let extra = endCol == terminal.cols-1 ? 1 : 0
                 selectionRange = NSRange(location: 0, length: endCol + extra)
             }
         } else if endRow < startRow {
@@ -706,12 +706,15 @@ extension TerminalView {
                     }
                     
                     let rect = CGRect (origin: origin, size: size)
-                    if row == 1 {
-                        if rect.width < 660 {
-                            print("Less")
-                        }
-                        print("col=\(col) rgc=\(runGlyphsCount) ROW R= \(rect)")
+                    #if DEBUG
+                    // Debug geometry logging (throttled): only log first few rows resize scenarios.
+                    struct GeometryLogState { static var sampleCount = 0 }
+                    if row == 1 && GeometryLogState.sampleCount < 5 {
+                        if rect.width < 660 { print("Less") }
+                        print("[DEBUG] rowGeom col=\(col) glyphs=\(runGlyphsCount) rect=\(rect)")
+                        GeometryLogState.sampleCount += 1
                     }
+                    #endif
                     #if os(macOS)
                     rect.applying(transform).fill(using: .destinationOver)
                     #else
