@@ -895,7 +895,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             return Position (col: Int (x), row: Int (bounds.height-y))
         }
         let col = Int (point.x / cellDimension.width)
-        let row = Int ((frame.height-point.y) / cellDimension.height) + terminal.buffer.yDisp
+        // Screen-relative row (0..rows-1). Do NOT add yDisp here.
+        // SelectionService methods (startSelection/dragExtend/shiftExtend) expect screen-relative rows
+        // and add terminal.buffer.yDisp internally.
+        let row = Int ((bounds.height-point.y) / cellDimension.height)
         if row < 0 {
             return (Position(col: 0, row: 0), toInt (point))
         }
