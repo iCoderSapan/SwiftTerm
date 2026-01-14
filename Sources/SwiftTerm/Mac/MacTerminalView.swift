@@ -315,6 +315,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         scroller.scrollerStyle = style
         scroller.knobProportion = 0.1
         scroller.isEnabled = false
+        // AdvTerm: hide the legacy scroller entirely (it shows up as a small knob/cutout
+        // in the bottom-right of each pane). Scrolling still works via trackpad/mouse wheel.
+        scroller.isHidden = true
         addSubview (scroller)
         scroller.action = #selector(scrollerActivated)
         scroller.target = self
@@ -342,12 +345,14 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
      */
     open func getOptimalFrameSize () -> NSRect
     {
-        return NSRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols) + scroller.frame.width, height: cellDimension.height * CGFloat(terminal.rows))
+        let reserved = scroller.isHidden ? 0 : scroller.frame.width
+        return NSRect (x: 0, y: 0, width: cellDimension.width * CGFloat(terminal.cols) + reserved, height: cellDimension.height * CGFloat(terminal.rows))
     }
     
     func getEffectiveWidth (size: CGSize) -> CGFloat
     {
-        return (size.width-scroller.frame.width)
+        let reserved = scroller.isHidden ? 0 : scroller.frame.width
+        return (size.width-reserved)
     }
     
     open func scrolled(source terminal: Terminal, yDisp: Int) {
