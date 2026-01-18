@@ -98,6 +98,24 @@ class SelectionService: CustomDebugStringConvertible {
     func clamp (_ buffer: Buffer, _ p: Position) -> Position {
         return Position(col: min (p.col, buffer.cols-1), row: min (p.row, buffer.rows-1))
     }
+
+    /// Sets the selection using buffer-relative coordinates (rows refer to `buffer.lines` indices).
+    /// This is useful for selecting in scrollback.
+    public func setSelectionBufferRelative(start: Position, end: Position) {
+        let buffer = terminal.buffer
+        let maxRow = max(0, buffer.lines.count - 1)
+
+        func clampBuffer(_ p: Position) -> Position {
+            Position(
+                col: max(0, min(p.col, buffer.cols - 1)),
+                row: max(0, min(p.row, maxRow))
+            )
+        }
+
+        self.start = clampBuffer(start)
+        self.end = clampBuffer(end)
+        setActiveAndNotify()
+    }
     /**
      * Sets the selection, this is validated against the
      */

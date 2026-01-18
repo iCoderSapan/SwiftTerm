@@ -10,6 +10,10 @@ import Foundation
 import CoreGraphics
 import CoreText
 
+#if canImport(ObjectiveC)
+import ObjectiveC
+#endif
+
 #if os(iOS) || os(visionOS)
 import UIKit
 typealias TTColor = UIColor
@@ -27,6 +31,23 @@ typealias TTRect = CGRect
 typealias TTBezierPath = NSBezierPath
 public typealias TTImage = NSImage
 #endif
+
+// MARK: - Public search API (used by host apps)
+public struct TerminalSearchMatch: Equatable {
+    public let row: Int
+    public let col: Int
+    public let length: Int
+    public let wrapped: Bool
+
+    public init(row: Int, col: Int, length: Int, wrapped: Bool = false) {
+        self.row = row
+        self.col = col
+        self.length = length
+        self.wrapped = wrapped
+    }
+}
+
+private var advFindFlashWorkItemKey: UInt8 = 0
 
 // Holds the information used to render a line
 struct ViewLineInfo {
@@ -210,6 +231,7 @@ extension TerminalView {
             return newColor
         }
     }
+
 
     // Clears the cached state for colors and triggers a full display
     func colorsChanged ()
@@ -1332,6 +1354,119 @@ extension TerminalView {
     /// Clears the selection
     public func selectNone () {
         selection.selectNone()
+    }
+
+    /// Finds the next/previous occurrence of the query in the buffer, scrolls to it, and selects it.
+    /// - Parameters:
+    ///   - query: Text to search for.
+    ///   - from: The previous match to continue from; pass nil to start from current viewport.
+    ///   - backwards: If true, searches backwards.
+    ///   - caseSensitive: If true, performs a case-sensitive search.
+    /// - Returns: The found match, or nil.
+    public func findAndSelect(query: String, from: TerminalSearchMatch?, backwards: Bool, caseSensitive: Bool = false) -> TerminalSearchMatch? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let buffer = terminal.buffer
+        let lineCount = buffer.lines.count
+        guard lineCount > 0 else { return nil }
+
+        let options: String.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+
+        let startRow: Int
+        let startCol: Int
+        if let from {
+            startRow = max(0, min(from.row, lineCount - 1))
+            startCol = max(0, from.col + (backwards ? -1 : from.length))
+        } else {
+            startRow = max(0, min(buffer.yDisp, lineCount - 1))
+            startCol = 0
+        }
+
+        func findInLine(_ line: String, startAt col: Int, backwards: Bool) -> (Int, Int)? {
+            let boundedCol = max(0, min(col, line.count))
+            let startIndex = line.index(line.startIndex, offsetBy: boundedCol)
+            if backwards {
+                let prefix = String(line[..<startIndex])
+                if let r = prefix.range(of: trimmed, options: options.union(.backwards)) {
+                    let c = prefix.distance(from: prefix.startIndex, to: r.lowerBound)
+                    return (c, trimmed.count)
+                }
+                return nil
+            } else {
+                let suffix = String(line[startIndex...])
+                if let r = suffix.range(of: trimmed, options: options) {
+                    let c = boundedCol + suffix.distance(from: suffix.startIndex, to: r.lowerBound)
+                    return (c, trimmed.count)
+                }
+                return nil
+            }
+        }
+
+        let rowOrder: [Int] = {
+            if backwards {
+                let first = Array((0...startRow).reversed())
+                let second = Array(((startRow + 1)..<lineCount).reversed())
+                return first + second
+            } else {
+                let first = Array(startRow..<lineCount)
+                let second = Array(0..<startRow)
+                return first + second
+            }
+        }()
+
+        for (idx, row) in rowOrder.enumerated() {
+            let line = buffer.lines[row].translateToString(trimRight: false)
+            let col = (idx == 0 ? startCol : (backwards ? line.count : 0))
+            if let (foundCol, foundLen) = findInLine(line, startAt: col, backwards: backwards) {
+                let didWrap: Bool = backwards ? (row > startRow) : (row < startRow)
+                let match = TerminalSearchMatch(row: row, col: foundCol, length: foundLen, wrapped: didWrap)
+
+                // Reveal row (centered-ish) and select range.
+                let maxScrollback = max(buffer.lines.count - terminal.rows, 0)
+                let desiredTop = min(max(row - terminal.rows / 2, 0), maxScrollback)
+                scrollTo(row: desiredTop, notifyAccessibility: false)
+
+                // Selection uses buffer-relative positions; end is exclusive.
+                let startPos = Position(col: match.col, row: match.row)
+                let endPos = Position(col: match.col + max(1, match.length), row: match.row)
+                selection.setSelectionBufferRelative(start: startPos, end: endPos)
+                terminal.refresh(startRow: 0, endRow: terminal.rows)
+                updateDisplay(notifyAccessibility: false)
+                flashFindMatchSelectionHighlight()
+                return match
+            }
+        }
+
+        return nil
+    }
+
+    private func flashFindMatchSelectionHighlight() {
+        #if canImport(ObjectiveC)
+        // Cancel any pending restore from a previous find.
+        if let item = objc_getAssociatedObject(self, &advFindFlashWorkItemKey) as? DispatchWorkItem {
+            item.cancel()
+        }
+
+        let original = selectedTextBackgroundColor
+
+        #if os(macOS)
+        let flashColor = NSColor.systemYellow.withAlphaComponent(0.55)
+        #else
+        let flashColor = UIColor.systemYellow.withAlphaComponent(0.55)
+        #endif
+
+        selectedTextBackgroundColor = flashColor
+        updateDisplay(notifyAccessibility: false)
+
+        let restore = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.selectedTextBackgroundColor = original
+            self.updateDisplay(notifyAccessibility: false)
+        }
+        objc_setAssociatedObject(self, &advFindFlashWorkItemKey, restore, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: restore)
+        #endif
     }
     
 }
